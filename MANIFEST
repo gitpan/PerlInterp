@@ -1,0 +1,8 @@
+MANIFEST
+Makefile.PL
+Perl.pm
+Perl.xs
+README
+t/base.t
+t/inner.t
+typemap

@@ -1,0 +1,11 @@
+This is just a proof of concept for creating Perl interpreters
+from within Perl.
+
+Needs Perl 5.005 built with -DMULTIPLICITY.  If you don't know
+what that means, you probably have no use for this.
+
+
+
+Gurusamy Sarathy
+gsar@umich.edu
+25 Jul 1998
