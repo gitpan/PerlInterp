@@ -3,6 +3,9 @@ Makefile.PL
 Perl.pm
 Perl.xs
 README
-t/base.t
-t/inner.t
+t/1inc.t
+t/2base.t
+t/3inner.t
+t/4expr.t
 typemap
+META.yml                                 Module meta-data (added by MakeMaker)

@@ -2,6 +2,9 @@
  * Perl.xs
  *
  * Gurusamy Sarathy <gsar@umich.edu>
+ *
+ * Modified 2004-01-08 by Ben Morrow <ben@morrow.me.uk>
+ *
  */
 
 #include "EXTERN.h"
@@ -12,22 +15,21 @@
 #error "Must build Perl with -DMULTIPLICITY"
 #endif
 
-extern void boot_DynaLoader(CV* cv);
-
-static void
-xs_init(void)
-{
-    newXS("DynaLoader::boot_DynaLoader", boot_DynaLoader, __FILE__);
-}
+EXTERN_C void xs_init(pTHX);
 
 struct Perl_t {
-    PerlInterpreter *i;
-    char **argv;
+        PerlInterpreter *i;
+        char           **argv;
+        int              argc;
+        bool             done_parse;
 };
 
 typedef struct Perl_t *Perl;
 
-#ifndef SAVEGLOBALS
+static bool do_debug = 0;
+#define debug if(do_debug) warn
+
+#ifndef PERL_GET_CONTEXT
 
 typedef struct perl_global_buffers_t {
     char ptokenbuf[sizeof(PL_tokenbuf)];
@@ -38,17 +40,25 @@ typedef struct perl_global_buffers_t {
 static void save_globals(perl_global_buffers *pgb);
 static void restore_globals(void *p);
 
-#define dSAVEGLOBALS	\
-	perl_global_buffers pgb;				\
-	PerlInterpreter *prevperl = PL_curinterp
+#define dSUBPERL	                         \
+	perl_global_buffers pgb;		 \
+	bool saved_globals = 0;                  \
+	PerlInterpreter *mainperl = PL_curinterp
 
-#define SAVEGLOBALS	save_globals(&pgb)
+#define SUBPERL(p)               \
+    STMT_START {                 \
+	save_globals(&pgb);      \
+	saved_globals = 1;       \
+	PL_curinterp = (p)->i;   \
+    } STMT_END
 
 void
 save_globals(perl_global_buffers *pgb)
 {
     ENTER;
     /* XXX saving everything is probably excessive */
+    /* XXX this needs checking against all perls from 5.005
+       until we have PERL_GET_CONTEXT */
     SAVEINT(PL_uid);
     SAVEINT(PL_euid);
     SAVEINT(PL_gid);
@@ -128,105 +138,204 @@ static void restore_globals(void *p)
     Copy(pgb->pnexttype, PL_nexttype, sizeof(PL_nexttype)/sizeof(I32), char);
 }
 
-#define FREEGLOBALS	\
-    STMT_START {						\
-	PL_curinterp = prevperl;				\
-	LEAVE;							\
+#define MAINPERL                  \
+    STMT_START {		  \
+	PL_curinterp = mainperl;  \
+	if(saved_globals) LEAVE;  \
+	saved_globals = 0;        \
     } STMT_END
 
-#endif	/* !SAVEGLOBALS */
+#else /* PERL_GET_CONTEXT */
+
+#define dSUBPERL void *mainperl = PERL_GET_CONTEXT
+
+#define SUBPERL(p)                      \
+    STMT_START {                        \
+	mainperl = PERL_GET_CONTEXT;    \
+	debug("SUBPERL:  %#lx -> %#lx", \
+          mainperl, (void *)(p->i));    \
+	PERL_SET_CONTEXT(p->i);         \
+    } STMT_END
+
+#define MAINPERL                        \
+    STMT_START {                        \
+	void *tmp = PERL_GET_CONTEXT;   \
+	PERL_SET_CONTEXT(mainperl);     \
+	debug("MAINPERL: %#lx -> %#lx", \
+          tmp, mainperl);               \
+    } STMT_END
+
+#endif /* PERL_GET_CONTEXT */
 
 MODULE = Perl		PACKAGE = Perl
 
 PROTOTYPES: DISABLE
 
+void
+_set_debug(to)
+    bool to
+CODE:
+    do_debug = to;
+
 Perl
-new(pkg,...)
-    char *pkg
+_new(class)
+    const char *class
 CODE:
     {
-	char **av;
-	int ac;
-	PerlInterpreter *prevperl = PL_curinterp;
+	dSUBPERL;
+
+        if(strNE(class, "Perl"))
+            croak("Perl::_new can only construct Perl objects");
+
 	New(999, RETVAL, 1, struct Perl_t);
-	RETVAL->i = perl_alloc();
-	PL_curinterp = prevperl;
+	RETVAL->i          = perl_alloc();
+        RETVAL->done_parse = 0;
+        RETVAL->argc       = 0;
+        RETVAL->argv       = NULL;
+	MAINPERL;
+	
 	if (!RETVAL->i) {
 	    Safefree(RETVAL);
-	    XSRETURN_NO;
+	    XSRETURN_UNDEF;
 	}
 
-	if (items > 1) {
-	    New(999, av, items+1, char*);
-	    av[0] = "";
-	    ac = 1;
-	    while (ac < items) {
-		av[ac] = SvPV(ST(ac), PL_na);
-		++ac;
-	    }
-	    av[ac] = Nullch;
-	}
-	else {
-	    ac = 2;
-	    New(999, av, ac+1, char*);
-	    av[0] = "";
-	    av[1] = BIT_BUCKET;
-	    av[2] = Nullch;
-	}
-	RETVAL->argv = av;
+	SUBPERL(RETVAL);
+ 	perl_construct(RETVAL->i);
 
-	perl_construct(RETVAL->i);
-	if (perl_parse(RETVAL->i, xs_init, ac, av, environ)) {
-	    Safefree(RETVAL->argv);
-	    Safefree(RETVAL);
-	    PL_curinterp = prevperl;
-	    XSRETURN_NO;
-	}
-	PL_curinterp = prevperl;
+	MAINPERL;
 	SPAGAIN;
     }
 OUTPUT:
     RETVAL
 
+Perl
+_add_argv(interp, ...)
+    Perl interp
+CODE:
+    {
+        char **av, *arg_p;
+        int ac;
+        STRLEN arg_l;
+	dSUBPERL;
+
+        RETVAL = interp;
+
+        if (interp->done_parse)
+            croak("can't add to argv after parse has been called");
+        if (items <= 1)
+            goto out;
+ 
+	if(!interp->argc)
+	    interp->argc++;
+
+        New(999, av, items + interp->argc, char*);
+        av[0] = "perl";
+
+        debug("_add_argv: i->ac=%d, items=%d", interp->argc, items);
+
+        ac = 1;
+	while (ac < interp->argc) {
+            av[ac] = interp->argv[ac];
+            debug("_add_argv: copy av[%d]=%s", ac, av[ac]);
+            ++ac;
+        }
+
+	interp->argc--; /* should really be items-- */
+
+        while (ac < interp->argc + items) {
+            arg_p  = SvPV(ST(ac - interp->argc), arg_l);
+	    
+	    SUBPERL(interp);
+            av[ac] = savepvn(arg_p, arg_l);
+	    MAINPERL;
+            
+	    debug("_add_argv: new  av[%d]=%s", ac, av[ac]);
+            ++ac;
+        }
+
+        av[ac] = Nullch;
+        Safefree(interp->argv);
+        interp->argv = av;
+        interp->argc = ac;
+
+    out:
+        debug("_add_argv: now i->ac=%d", interp->argc);
+    }
+
+void
+_argv(interp)
+    Perl interp
+PREINIT:
+    int i;
+PPCODE:
+    if(interp->argc) {
+        EXTEND(SP, interp->argc - 1);
+        for (i = 1; i < interp->argc; i++) {
+            PUSHs(sv_2mortal(newSVpv(interp->argv[i], 0)));
+        }
+    }
+
+int
+_parse(interp)
+    Perl interp
+CODE:
+    {
+        dSUBPERL;
+
+        if(interp->done_parse)
+            croak("parse has already been called on this interpreter");
+        if(!interp->argc)
+            croak("you must set some argvments before you call parse");
+
+        SUBPERL(interp);
+        RETVAL = perl_parse(interp->i, xs_init, interp->argc, interp->argv, environ);
+        interp->done_parse = 1;
+
+	MAINPERL;
+	SPAGAIN;
+    }
+OUTPUT:
+    RETVAL
 
 int
 run(interp)
     Perl	interp
 CODE:
     {
-	dSAVEGLOBALS;
-	SAVEGLOBALS;
-	PL_curinterp = interp->i;
+    	dSUBPERL;
+
+	SUBPERL(interp);
 	RETVAL = perl_run(interp->i);
-	FREEGLOBALS;
+	MAINPERL;
 	SPAGAIN;
     }
 OUTPUT:
     RETVAL
 
 
-bool
-eval(interp, script)
+SV *
+_eval(interp, script)
     Perl	interp
     char *script
 CODE:
     {
-	dSAVEGLOBALS;
-	RETVAL = 1;
-	SAVEGLOBALS;
-	PL_curinterp = interp->i;
+    	dSUBPERL;
+	char *rv_p;
+	STRLEN rv_l;
+	SV *rv_s;
 
+	SUBPERL(interp);
 	SAVETMPS;
-	/* XXX need a way for SVs to navigate interpreters
-	 * if this is to return values to the caller */
-	perl_eval_pv(script, FALSE);
-	FREETMPS;
-	if (SvTRUE(ERRSV)) {
-	    warn ("Perl->eval failed: %s\n", SvPV(ERRSV, na)) ;
-	    RETVAL = 0;
-	}
+	rv_s = eval_pv(script, 1);
+	rv_p = SvPV(rv_s, rv_l);
+	
+	MAINPERL;
+	RETVAL = newSVpv(rv_p, rv_l);
 
-	FREEGLOBALS;
+	SUBPERL(interp);
+	FREETMPS;
+	
+	MAINPERL;
 	SPAGAIN;
     }
 OUTPUT:
@@ -238,12 +347,26 @@ DESTROY(interp)
     Perl	interp
 CODE:
     {
-	dSAVEGLOBALS;
-	SAVEGLOBALS;
-	/* runs destructors, so context save required */
+	dSUBPERL;
+        int i;
+
+	debug("starting DESTROY");
+	
+	SUBPERL(interp);
 	perl_destruct(interp->i);
+	
+	MAINPERL;
+	debug("done destruct");
+	
+	SUBPERL(interp);
 	perl_free(interp->i);
+	
+	MAINPERL;
+	debug("in DESTROY: ac=%d", interp->argc);
+        for(i = 1; i < interp->argc; i++) {
+	    debug("DESTROY: freeing av[%d]", i);
+            Safefree(interp->argv[i]);
+	}
 	Safefree(interp->argv);
 	Safefree(interp);
-	FREEGLOBALS;
     }
