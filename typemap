@@ -1,2 +1,3 @@
 TYPEMAP
 Perl		 	T_PTROBJ
+const char *            T_PV

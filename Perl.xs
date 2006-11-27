@@ -10,9 +10,13 @@
 #include "EXTERN.h"
 #include "perl.h"
 #include "XSUB.h"
+#include "embed.h"
+
+#define NEED_eval_pv
+#include "ppport.h"
 
 #ifndef MULTIPLICITY
-#error "Must build Perl with -DMULTIPLICITY"
+#  error "You must build perl with -Dusemultiplicity"
 #endif
 
 EXTERN_C void xs_init(pTHX);
@@ -28,124 +32,6 @@ typedef struct Perl_t *Perl;
 
 static bool do_debug = 0;
 #define debug if(do_debug) warn
-
-#ifndef PERL_GET_CONTEXT
-
-typedef struct perl_global_buffers_t {
-    char ptokenbuf[sizeof(PL_tokenbuf)];
-    YYSTYPE pnextval[sizeof(PL_nextval)];
-    I32 pnexttype[sizeof(PL_nexttype)];
-} perl_global_buffers;
-
-static void save_globals(perl_global_buffers *pgb);
-static void restore_globals(void *p);
-
-#define dSUBPERL	                         \
-	perl_global_buffers pgb;		 \
-	bool saved_globals = 0;                  \
-	PerlInterpreter *mainperl = PL_curinterp
-
-#define SUBPERL(p)               \
-    STMT_START {                 \
-	save_globals(&pgb);      \
-	saved_globals = 1;       \
-	PL_curinterp = (p)->i;   \
-    } STMT_END
-
-void
-save_globals(perl_global_buffers *pgb)
-{
-    ENTER;
-    /* XXX saving everything is probably excessive */
-    /* XXX this needs checking against all perls from 5.005
-       until we have PERL_GET_CONTEXT */
-    SAVEINT(PL_uid);
-    SAVEINT(PL_euid);
-    SAVEINT(PL_gid);
-    SAVEINT(PL_egid);
-    SAVEI16(PL_nomemok);
-    SAVEI32(PL_an);
-    SAVEI32(PL_cop_seqmax);
-    SAVEI16(PL_op_seqmax);
-    SAVEI32(PL_evalseq);
-    SAVESPTR(PL_origenviron);
-    SAVEI32(PL_origalen);
-    SAVEINT(PL_maxo);
-    PL_maxo = MAXO;
-    SAVESPTR(PL_sighandlerp);
-    SAVESPTR(PL_runops);
-    PL_runops = RUNOPS_DEFAULT;
-    SAVEIV(PL_na);
-    SAVEI32(PL_lex_state);
-    SAVEI32(PL_lex_defer);
-    SAVEINT(PL_lex_expect);
-    SAVEI32(PL_lex_brackets);
-    SAVEI32(PL_lex_formbrack);
-    SAVEI32(PL_lex_fakebrack);
-    SAVEI32(PL_lex_casemods);
-    SAVEI32(PL_lex_dojoin);
-    SAVEI32(PL_lex_starts);
-    /*if (PL_lex_stuff)
-	save_item(PL_lex_stuff);
-    if (PL_lex_repl)
-	save_item(PL_lex_repl);*/
-    SAVESPTR(PL_lex_op);
-    SAVESPTR(PL_lex_inpat);
-    SAVEI32(PL_lex_inwhat);
-    SAVEPPTR(PL_lex_brackstack);
-    SAVEPPTR(PL_lex_casestack);
-    SAVEI32(PL_nexttoke);
-    SAVESPTR(PL_linestr);
-    SAVEPPTR(PL_bufptr);
-    SAVEPPTR(PL_oldbufptr);
-    SAVEPPTR(PL_oldoldbufptr);
-    SAVEPPTR(PL_bufend);
-    SAVEINT(PL_expect);
-    SAVEI32(PL_multi_start);
-    SAVEI32(PL_multi_end);
-    SAVEI32(PL_multi_open);
-    SAVEI32(PL_multi_close);
-    SAVEI32(PL_error_count);
-    SAVEI32(PL_subline);
-    /*if (PL_subname)
-	save_item(PL_subname);*/
-    SAVEI32(PL_min_intro_pending);
-    SAVEI32(PL_max_intro_pending);
-    SAVEI32(PL_padix);
-    SAVEI32(PL_padix_floor);
-    SAVEI32(PL_pad_reset_pending);
-    SAVEI32(PL_thisexpr);
-    SAVEPPTR(PL_last_uni);
-    SAVEPPTR(PL_last_lop);
-    SAVEI16(PL_last_lop_op);
-    SAVEI16(PL_in_my);
-    SAVESPTR(PL_in_my_stash);
-    SAVEHINTS();
-    SAVEI16(PL_do_undump);
-    SAVEI32(PL_debug);
-    SAVEIV(PL_amagic_generation);
-    Copy(PL_tokenbuf, pgb->ptokenbuf, sizeof(PL_tokenbuf),char);
-    Copy(PL_nextval, pgb->pnextval, sizeof(PL_nextval)/sizeof(YYSTYPE),char);
-    Copy(PL_nexttype, pgb->pnexttype, sizeof(PL_nexttype)/sizeof(I32), char);
-    SAVEDESTRUCTOR(restore_globals, pgb);
-}
-
-static void restore_globals(void *p)
-{
-    perl_global_buffers *pgb = (perl_global_buffers*)p;
-    Copy(pgb->ptokenbuf, PL_tokenbuf,sizeof(PL_tokenbuf), char);
-    Copy(pgb->pnextval, PL_nextval, sizeof(PL_nextval)/sizeof(YYSTYPE),char);
-    Copy(pgb->pnexttype, PL_nexttype, sizeof(PL_nexttype)/sizeof(I32), char);
-}
-
-#define MAINPERL                  \
-    STMT_START {		  \
-	PL_curinterp = mainperl;  \
-	if(saved_globals) LEAVE;  \
-	saved_globals = 0;        \
-    } STMT_END
-
-#else /* PERL_GET_CONTEXT */
 
 #define dSUBPERL void *mainperl = PERL_GET_CONTEXT
 
@@ -164,8 +50,6 @@ static void restore_globals(void *p)
 	debug("MAINPERL: %#lx -> %#lx", \
           tmp, mainperl);               \
     } STMT_END
-
-#endif /* PERL_GET_CONTEXT */
 
 MODULE = Perl		PACKAGE = Perl
 
@@ -324,6 +208,7 @@ CODE:
 	STRLEN rv_l;
 	SV *rv_s;
 
+        debug("got [%s] to eval", script);
 	SUBPERL(interp);
 	SAVETMPS;
 	rv_s = eval_pv(script, 1);

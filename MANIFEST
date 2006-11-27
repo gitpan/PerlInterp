@@ -1,11 +1,15 @@
 MANIFEST
+META.yml
 Makefile.PL
 Perl.pm
 Perl.xs
 README
-t/1inc.t
-t/2base.t
-t/3inner.t
-t/4expr.t
+ppport.h
 typemap
-META.yml                                 Module meta-data (added by MakeMaker)
+t/1_eval.t
+t/2run.t
+t/3inc.t
+t/4eval.t
+t/5multi.t
+t/6threads.t
+t/Foo.pm
