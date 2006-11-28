@@ -235,8 +235,20 @@ CODE:
 	dSUBPERL;
         int i;
 
-	debug("starting DESTROY");
-	
+	debug("in DESTROY: ac=%d", interp->argc);
+        for(i = 1; i < interp->argc; i++) {
+	    debug("DESTROY: freeing av[%d]", i);
+
+            /* Win32 requires frees to be in the correct interpreter,
+               and before perl_destruct has been called */
+            SUBPERL(interp);
+            Safefree(interp->argv[i]);
+            MAINPERL;
+	}
+
+	Safefree(interp->argv);
+        debug("freed argv");
+
 	SUBPERL(interp);
 	perl_destruct(interp->i);
 	
@@ -245,13 +257,7 @@ CODE:
 	
 	SUBPERL(interp);
 	perl_free(interp->i);
-	
-	MAINPERL;
-	debug("in DESTROY: ac=%d", interp->argc);
-        for(i = 1; i < interp->argc; i++) {
-	    debug("DESTROY: freeing av[%d]", i);
-            Safefree(interp->argv[i]);
-	}
-	Safefree(interp->argv);
+
+        MAINPERL;
 	Safefree(interp);
     }

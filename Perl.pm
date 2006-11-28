@@ -33,7 +33,7 @@ BEGIN {
     require DynaLoader;
     our @ISA = 'DynaLoader';
 
-    our $VERSION = "0.04"; 
+    our $VERSION = '0.05'; 
     bootstrap Perl;
 
     if ($ENV{PERL_PERLPM_DEBUG}) {
